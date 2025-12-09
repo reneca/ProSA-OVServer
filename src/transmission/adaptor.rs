@@ -217,7 +217,7 @@ where
             Ok(response) => {
                 if self.session_id.is_none() {
                     match response.status() {
-                        StatusCode::OK => {
+                        StatusCode::OK | StatusCode::CONFLICT => {
                             if let Some(session_id) =
                                 response.headers().get("x-transmission-session-id")
                             {
