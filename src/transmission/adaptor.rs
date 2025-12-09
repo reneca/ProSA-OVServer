@@ -179,7 +179,29 @@ where
         &self,
         mut request_builder: http::request::Builder,
     ) -> Result<Request<BoxBody<hyper::body::Bytes, Infallible>>, FetcherError<M>> {
-        if self.session_id.is_none() {
+        if let Some(session_id) = &self.session_id {
+            if let Some(method) = self.state.get_method() {
+                request_builder = request_builder
+                    .method(Method::POST)
+                    .uri(self.transmission_uri.clone())
+                    .header(hyper::header::CONNECTION, "keep-alive")
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .header(hyper::header::ACCEPT, "application/json")
+                    .header("X-Transmission-Session-Id", session_id);
+
+                let request = request_builder.body(BoxBody::new(Full::new(Bytes::from(
+                    serde_json::to_vec(&method).map_err(|e| {
+                        FetcherError::Other(format!("can't serialize transmission method: {e}"))
+                    })?,
+                ))))?;
+
+                Ok(request)
+            } else {
+                Err(FetcherError::Other(
+                    "Can't get torrent method for call".to_string(),
+                ))
+            }
+        } else {
             request_builder = request_builder
                 .method(Method::GET)
                 .uri(self.transmission_uri.clone())
@@ -187,25 +209,6 @@ where
                 .header(hyper::header::ACCEPT, "application/json");
             let request = request_builder.body(BoxBody::default())?;
             Ok(request)
-        } else if let Some(method) = self.state.get_method() {
-            request_builder = request_builder
-                .method(Method::POST)
-                .uri(self.transmission_uri.clone())
-                .header(hyper::header::CONNECTION, "keep-alive")
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .header(hyper::header::ACCEPT, "application/json");
-
-            let request = request_builder.body(BoxBody::new(Full::new(Bytes::from(
-                serde_json::to_vec(&method).map_err(|e| {
-                    FetcherError::Other(format!("can't serialize transmission method: {e}"))
-                })?,
-            ))))?;
-
-            Ok(request)
-        } else {
-            Err(FetcherError::Other(
-                "Can't get torrent method for call".to_string(),
-            ))
         }
     }
 
@@ -346,7 +349,8 @@ where
                                 TorrentFetchState::End => Ok(FetchAction::None),
                             }
                         }
-                        StatusCode::UNAUTHORIZED => {
+                        StatusCode::CONFLICT => {
+                            warn!("Transmission session ID expired");
                             self.session_id = None;
                             // Ask for a new session id (it may expired)
                             Ok(FetchAction::Http)
