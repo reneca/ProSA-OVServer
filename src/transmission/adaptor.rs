@@ -59,9 +59,11 @@ struct TorrentSettings {
     /// List of allowed trackers. Allow the torrent to seed if it's in this list
     #[serde(default)]
     tracker_allowlist: Vec<String>,
-    /// Remove the torrent after an amount of days
+    /// Remove torrent after an amount of days
     #[serde(default)]
     remove_after: Option<u32>,
+    /// Remove public torrent after an amount of hours
+    remove_public_after: Option<u64>,
 }
 
 impl TorrentSettings {
@@ -78,8 +80,16 @@ impl TorrentSettings {
     }
 
     /// Method to know if the torrent need to be removed
-    fn need_removal(&self, added_date: DateTime<Utc>) -> bool {
-        if let Some(days) = self.remove_after.map(|d| {
+    fn need_removal(&self, added_date: DateTime<Utc>, is_private: bool) -> bool {
+        if !is_private
+            && let Some(hours) = self.remove_public_after.map(|h| {
+                Utc::now()
+                    .checked_sub_signed(Duration::hours(h as i64))
+                    .unwrap()
+            })
+        {
+            added_date < hours
+        } else if let Some(days) = self.remove_after.map(|d| {
             Utc::now()
                 .checked_sub_signed(Duration::days(d.into()))
                 .unwrap()
@@ -109,7 +119,7 @@ where
         + std::marker::Sized
         + std::clone::Clone
         + std::fmt::Debug
-        + prosa_utils::msg::tvf::Tvf
+        + prosa::core::msg::Tvf
         + std::default::Default,
 {
     fn new(proc: &FetcherProc<M>) -> Result<Self, FetcherError<M>>
@@ -270,7 +280,8 @@ where
                                 TorrentFetchState::TorrentGet => {
                                     let mut torrent_no_peer_list = Vec::new();
                                     let mut torrent_rm_list = Vec::new();
-                                    let mut torrents_status = Vec::new();
+                                    let mut torrents_status =
+                                        Vec::with_capacity(api_resp.arguments.torrents.len());
                                     for torrent in api_resp.arguments.torrents {
                                         if let Some(status) = torrent.status {
                                             torrents_status.push(status);
@@ -285,10 +296,9 @@ where
                                                 })
                                             {
                                                 torrent_no_peer_list.push(torrent_id);
-                                            } else if torrent
-                                                .added_date
-                                                .is_some_and(|d| torrent_settings.need_removal(d))
-                                            {
+                                            } else if torrent.added_date.is_some_and(|d| {
+                                                torrent_settings.need_removal(d, torrent.is_private)
+                                            }) {
                                                 torrent_rm_list.push(torrent_id);
                                             }
                                         }
@@ -350,9 +360,31 @@ where
                             }
                         }
                         StatusCode::CONFLICT => {
-                            warn!("Transmission session ID expired");
-                            self.session_id = None;
-                            // Ask for a new session id (it may expired)
+                            // Try to get the new session ID
+                            self.session_id = if let Some(session_id) =
+                                response.headers().get("x-transmission-session-id")
+                            {
+                                session_id.to_str().map(|s| s.to_string()).ok()
+                            } else {
+                                None
+                            };
+
+                            if let Some(body) = response
+                                .into_body()
+                                .collect()
+                                .await
+                                .ok()
+                                .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
+                            {
+                                warn!(
+                                    "Transmission session ID[{:?}] expired: {body}",
+                                    self.session_id
+                                );
+                            } else {
+                                warn!("Transmission session ID[{:?}] expired", self.session_id);
+                            }
+
+                            // Continue the flow
                             Ok(FetchAction::Http)
                         }
                         code => Err(FetcherError::Other(format!(

@@ -828,6 +828,7 @@ pub struct SessionStats {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ResponseArguments {
     pub version: Option<String>,
     #[serde(default)]
@@ -840,7 +841,9 @@ pub struct ResponseArguments {
     pub paused_torrent_count: Option<u32>,
     pub torrent_count: Option<u32>,
     pub upload_speed: Option<u64>,
+    #[serde(rename = "cumulative-stats")]
     pub cumulative_stats: Option<SessionStats>,
+    #[serde(rename = "current-stats")]
     pub current_stats: Option<SessionStats>,
 }
 
@@ -910,7 +913,7 @@ mod tests {
         );
         assert_eq!(
             Some(
-                "{\"method\":\"torrent_get\",\"arguments\":{\"fields\":[\"id\",\"name\",\"totalSize\"],\"ids\":[7,10]}}"
+                "{\"method\":\"torrent-get\",\"arguments\":{\"fields\":[\"id\",\"name\",\"totalSize\"],\"ids\":[7,10]}}"
             ),
             serde_json::to_string(&request).ok().as_deref()
         );
